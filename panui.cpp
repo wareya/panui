@@ -1,3 +1,4 @@
+#define usleep nall_usleep
 #define SDL_DYNLIB
 #include <iostream>
 #include <SDL2/SDL.h>
@@ -6,6 +7,8 @@
 #include <mupen/m64p_frontend.h>
 #include <mupen/m64p_types.h>
 #undef main
+#undef usleep
+#include <unistd.h>
 
 using namespace nall;
 using namespace phoenix;
@@ -36,15 +39,28 @@ namespace API
     uint8_t * romdata;
 }
 
+char working_dir[PATH_MAX];
+string romname;
+SDL_Thread * corethread;
+SDL_Thread * romthread;
 
 void debug (void * ctx, int level, const char * msg)
 {
-    printf("%s: %s\n", (const char *) ctx, msg);
+    if ( level != M64MSG_VERBOSE )
+        std::cout << (const char *)ctx << ": " << msg << "\n";
 }
 
-int bootscript(void * ptr)
+int bootscript( void * ptr )
 {
+    SDL_WaitThread(romthread, NULL);
+    
+    if(working_dir)
+        chdir((const char *)(working_dir));
+    
     auto romname = (string *)ptr;
+    if(!romname)
+        return 0;
+    
     file romfile(*romname, file::mode::read);
     
     API::romdata = (uint8_t *)malloc(romfile.size());
@@ -56,6 +72,7 @@ int bootscript(void * ptr)
         std::cout << "Error loading ROM: " << err;
         return 0;
     }
+    std::cout << "UI: Did load ROM; attaching plugins.\n";
     
     m64p_plugin_type VideoType;
     int VideoVersion;
@@ -100,11 +117,10 @@ int bootscript(void * ptr)
         std::cout << "RSP plugin errored while attaching: " << err;
         return 0;
     }
+    std::cout << "UI: Did attach all plugins; running ROM.\n";
     
     API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
 }
-
-string romname;
 
 struct MainWindow : Window
 {
@@ -116,50 +132,70 @@ struct MainWindow : Window
     Button btnpauser;
     image pause;
     image play;
+    bool paused;
     BrowserWindow browser;
-    SDL_Thread * corethread;
-    
-    MainWindow()
-    {
-        setFrameGeometry({64, 64, 242, 128});
-        
-        browser.setTitle("Load ROM");
-        
-        btnload.setText   ("Load ROM");
-        btnload.onActivate = [this]()
-        {
-            romname = browser.setParent(*this).setFilters("n64 roms (*.n64,*.z64)").open();
-            corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
-        };
-        btnoptions.setText("Options");
-        
-        btnsave.setText   ("Save");
-        btnrestore.setText("Load");
-        
-        play.load("play.png");
-        pause.load("pause.png");
-        
-        btnpauser.setImage(play, Orientation::Vertical);
-        
-        layout.append(btnload,    Geometry{10      , 10         , 128 , 24});
-        layout.append(btnoptions, Geometry{10      , 10+ 24+4   , 128 , 24});
-        layout.append(btnsave,    Geometry{10      , 10+(24+4)*2, 64-2, 24});
-        layout.append(btnrestore, Geometry{10+64+2 , 10+(24+4)*2, 64-2, 24});
-        layout.append(btnpauser,  Geometry{10+128+4, 10         , 80  , 80});
-        append(layout);
-
-        onClose = &Application::quit;
-        
-        setResizable(false);
-        setVisible(); // must be after setResizable()
-    }
+    MainWindow();
 };
 
-int main()
+int romscript( void * window )
+{
+    romname = ((MainWindow *)window)->browser.setParent(*((MainWindow *)window)).setFilters("n64 roms (*.n64,*.z64,*.v64)").open();
+    return 0;
+}
+
+MainWindow::MainWindow()
+{
+    setFrameGeometry({64, 64, 242, 128});
+    
+    paused = true;
+    
+    browser.setTitle("Load ROM");
+    
+    btnload.setText   ("Load ROM");
+    btnload.onActivate = [this]()
+    {
+        getcwd(working_dir, PATH_MAX);
+        if(!working_dir)
+        {
+            std::cout << "UI: Error caching current directory.";
+            return;
+        }
+
+        romthread = SDL_CreateThread(romscript, "RomScript", this);
+        
+        corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
+    };
+    btnoptions.setText("Options");
+    
+    btnsave.setText   ("Save");
+    btnrestore.setText("Load");
+    
+    play.load("play.png");
+    pause.load("pause.png");
+    
+    btnpauser.setImage(play, Orientation::Vertical);
+    
+    layout.append(btnload,    Geometry{10      , 10         , 128 , 24});
+    layout.append(btnoptions, Geometry{10      , 10+ 24+4   , 128 , 24});
+    layout.append(btnsave,    Geometry{10      , 10+(24+4)*2, 64-2, 24});
+    layout.append(btnrestore, Geometry{10+64+2 , 10+(24+4)*2, 64-2, 24});
+    layout.append(btnpauser,  Geometry{10+128+4, 10         , 80  , 80});
+    append(layout);
+
+    onClose = &Application::quit;
+    
+    setResizable(false);
+    setVisible(); // must be after setResizable()
+}
+
+int main(int argc, char *argv[])
 {
     // GET SHIT RUNNING (aka everything is currently hardcoded)
     
     // core
+    
+    romname == "";
+    romthread = NULL;
     
     void * core = SDL_LoadObject("mupen64plus.dll");
     std::cout << SDL_GetError();
@@ -192,8 +228,12 @@ int main()
         return 0;
     
     // Video
-    
-    API::Video = SDL_LoadObject("mupen64plus-video-glide64mk2.dll");
+    const char * dllname = "";
+    if(argc > 1)
+        dllname = argv[1];
+    else
+        dllname = "mupen64plus-video-glide64mk2.dll";
+    API::Video = SDL_LoadObject(dllname);
     std::cout << SDL_GetError();
     if(!API::Video)
         return 0;
@@ -313,6 +353,15 @@ int main()
     }
     
     // window
+    
+    std::cout << "UI: Did startup all plugins.\n";
+    if(argc > 2)
+    {
+        std::cout << "UI: Found ROM on command line, loading: " << argv[2] << "\n";
+        romname = argv[2];
+        fopen("Makefile", "r");
+        corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
+    }
     
     new MainWindow;
     Application::run();
