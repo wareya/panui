@@ -228,7 +228,15 @@ MainWindow::MainWindow()
     btnoptions.setText("Options");
     
     btnsave.setText   ("Save");
+    btnsave.onActivate = [this]()
+    {
+        API::CoreDoCommand(M64CMD_STATE_SAVE, 0, NULL);
+    };
     btnrestore.setText("Load");
+    btnrestore.onActivate = [this]()
+    {
+        API::CoreDoCommand(M64CMD_STATE_LOAD, 0, NULL);
+    };
     
     img_play.load("play.png");
     img_pause.load("pause.png");
@@ -243,7 +251,7 @@ MainWindow::MainWindow()
     layout.append(btnpauser,  Geometry{10+128+4, 10         , 80  , 80});
     append(layout);
 
-    //onClose = &Application::quit;
+    onClose = &Application::quit;
     
     setResizable(false);
     setVisible(); // must be after setResizable()
