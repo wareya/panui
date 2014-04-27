@@ -359,7 +359,6 @@ int main(int argc, char *argv[])
     {
         std::cout << "UI: Found ROM on command line, loading: " << argv[2] << "\n";
         romname = argv[2];
-        fopen("Makefile", "r");
         corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
     }
     
