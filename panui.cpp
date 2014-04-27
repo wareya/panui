@@ -50,18 +50,52 @@ void debug (void * ctx, int level, const char * msg)
         std::cout << (const char *)ctx << ": " << msg << "\n";
 }
 
+struct MainWindow : Window
+{
+    FixedLayout layout;
+    Button btnload;
+    Button btnoptions;
+    Button btnsave;
+    Button btnrestore;
+    Button btnpauser;
+    image img_pause;
+    image img_play;
+    bool paused;
+    BrowserWindow browser;
+    MainWindow();
+    nall::function<void()> do_play;
+    nall::function<void()> do_pause;
+};
+
 int bootscript( void * ptr )
 {
-    SDL_WaitThread(romthread, NULL);
+    if(!ptr)
+    {
+        std::cout << "UI: Bad window in core boot.\n";
+        return 0;
+    }
+    MainWindow * mainwin = (MainWindow *)ptr;
+    
+    if(romthread)
+    {
+        std::cout << "UI: Waiting for rom...\n";
+        SDL_WaitThread(romthread, NULL);
+        std::cout << "UI: ROM got: " << romname << "\n";
+    }
     
     if(working_dir)
         chdir((const char *)(working_dir));
     
-    auto romname = (string *)ptr;
-    if(!romname)
+    if(!romname or romname.equals(""))
+    {
+        std::cout << "Bad romname, returning.\n";
+        corethread = NULL;
         return 0;
+    }
     
-    file romfile(*romname, file::mode::read);
+    char * cstr_romname = romname.data();
+    std::cout << "UI: ROM cstring: " << cstr_romname << "\n";
+    file romfile(cstr_romname, file::mode::read);
     
     API::romdata = (uint8_t *)malloc(romfile.size());
     romfile.read(API::romdata, romfile.size());
@@ -70,6 +104,7 @@ int bootscript( void * ptr )
     if(err)
     {
         std::cout << "Error loading ROM: " << err;
+        corethread = NULL;
         return 0;
     }
     std::cout << "UI: Did load ROM; attaching plugins.\n";
@@ -82,6 +117,7 @@ int bootscript( void * ptr )
     if(err != M64ERR_SUCCESS)
     {
         std::cout << "Video plugin errored while attaching: " << err;
+        corethread = NULL;
         return 0;
     }
     
@@ -93,6 +129,7 @@ int bootscript( void * ptr )
     if(err != M64ERR_SUCCESS)
     {
         std::cout << "Audio plugin errored while attaching: " << err;
+        corethread = NULL;
         return 0;
     }
     
@@ -104,6 +141,7 @@ int bootscript( void * ptr )
     if(err != M64ERR_SUCCESS)
     {
         std::cout << "Input plugin errored while attaching: " << err;
+        corethread = NULL;
         return 0;
     }
     
@@ -115,36 +153,54 @@ int bootscript( void * ptr )
     if(err != M64ERR_SUCCESS)
     {
         std::cout << "RSP plugin errored while attaching: " << err;
+        corethread = NULL;
         return 0;
     }
     std::cout << "UI: Did attach all plugins; running ROM.\n";
     
+    mainwin->btnpauser.setImage(mainwin->img_pause, Orientation::Vertical);
+    mainwin->btnpauser.onActivate = mainwin->do_pause;
+    mainwin->paused = false;
+    
     API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
+    corethread = NULL;
+    
+    return 0;
 }
-
-struct MainWindow : Window
-{
-    FixedLayout layout;
-    Button btnload;
-    Button btnoptions;
-    Button btnsave;
-    Button btnrestore;
-    Button btnpauser;
-    image pause;
-    image play;
-    bool paused;
-    BrowserWindow browser;
-    MainWindow();
-};
 
 int romscript( void * window )
 {
     romname = ((MainWindow *)window)->browser.setParent(*((MainWindow *)window)).setFilters("n64 roms (*.n64,*.z64,*.v64)").open();
+    romthread = NULL;
     return 0;
 }
 
 MainWindow::MainWindow()
 {
+    do_play = [this]()
+    {
+        if(corethread and this->paused)
+        {
+            API::CoreDoCommand(M64CMD_RESUME, 0, NULL);
+            this->btnpauser.setImage(this->img_pause, Orientation::Vertical);
+            this->btnpauser.onActivate = this->do_pause;
+            this->paused = false;
+        }
+        else
+            std::cout << "UI: No corethread in do_play\n";
+    };
+    do_pause = [this]()
+    {
+        if(corethread and !this->paused)
+        {
+            API::CoreDoCommand(M64CMD_PAUSE, 0, NULL);
+            this->btnpauser.setImage(this->img_play, Orientation::Vertical);
+            this->btnpauser.onActivate = this->do_play;
+            this->paused = true;
+        }
+        else
+            std::cout << "UI: No corethread in do_play\n";
+    };
     setFrameGeometry({64, 64, 242, 128});
     
     paused = true;
@@ -154,6 +210,9 @@ MainWindow::MainWindow()
     btnload.setText   ("Load ROM");
     btnload.onActivate = [this]()
     {
+        if(romthread or corethread)
+            return;
+        
         getcwd(working_dir, PATH_MAX);
         if(!working_dir)
         {
@@ -163,17 +222,19 @@ MainWindow::MainWindow()
 
         romthread = SDL_CreateThread(romscript, "RomScript", this);
         
-        corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
+        corethread = SDL_CreateThread(bootscript, "BootScript", this);
     };
+    API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
     btnoptions.setText("Options");
     
     btnsave.setText   ("Save");
     btnrestore.setText("Load");
     
-    play.load("play.png");
-    pause.load("pause.png");
+    img_play.load("play.png");
+    img_pause.load("pause.png");
     
-    btnpauser.setImage(play, Orientation::Vertical);
+    btnpauser.onActivate = do_play;
+    btnpauser.setImage(img_play, Orientation::Vertical);
     
     layout.append(btnload,    Geometry{10      , 10         , 128 , 24});
     layout.append(btnoptions, Geometry{10      , 10+ 24+4   , 128 , 24});
@@ -182,7 +243,7 @@ MainWindow::MainWindow()
     layout.append(btnpauser,  Geometry{10+128+4, 10         , 80  , 80});
     append(layout);
 
-    onClose = &Application::quit;
+    //onClose = &Application::quit;
     
     setResizable(false);
     setVisible(); // must be after setResizable()
@@ -194,7 +255,7 @@ int main(int argc, char *argv[])
     
     // core
     
-    romname == "";
+    romname = "";
     romthread = NULL;
     
     void * core = SDL_LoadObject("mupen64plus.dll");
