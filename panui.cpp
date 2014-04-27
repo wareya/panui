@@ -37,6 +37,7 @@ namespace API
     ptr_PluginStartup InputStartup;
     
     uint8_t * romdata;
+    unsigned romsize;
 }
 
 char working_dir[PATH_MAX];
@@ -83,24 +84,7 @@ int bootscript( void * ptr )
         std::cout << "UI: ROM got: " << romname << "\n";
     }
     
-    if(working_dir)
-        chdir((const char *)(working_dir));
-    
-    if(!romname or romname.equals(""))
-    {
-        std::cout << "Bad romname, returning.\n";
-        corethread = NULL;
-        return 0;
-    }
-    
-    char * cstr_romname = romname.data();
-    std::cout << "UI: ROM cstring: " << cstr_romname << "\n";
-    file romfile(cstr_romname, file::mode::read);
-    
-    API::romdata = (uint8_t *)malloc(romfile.size());
-    romfile.read(API::romdata, romfile.size());
-    
-    m64p_error err = API::CoreDoCommand(M64CMD_ROM_OPEN, romfile.size(), API::romdata);
+    m64p_error err = API::CoreDoCommand(M64CMD_ROM_OPEN, API::romsize, API::romdata);
     if(err)
     {
         std::cout << "Error loading ROM: " << err;
@@ -168,9 +152,33 @@ int bootscript( void * ptr )
     return 0;
 }
 
+int loadrom (string romname)
+{
+    if(working_dir)
+        chdir((const char *)(working_dir));
+    
+    if(!romname or romname.equals(""))
+    {
+        std::cout << "Bad romname, returning.\n";
+        corethread = NULL;
+        return 0;
+    }
+    
+    char * cstr_romname = romname.data();
+    std::cout << "UI: ROM cstring: " << cstr_romname << "\n";
+    file romfile(cstr_romname, file::mode::read);
+    
+    API::romdata = (uint8_t *)malloc(romfile.size());
+    API::romsize = romfile.size();
+    
+    romfile.read(API::romdata, API::romsize);
+}
+
 int romscript( void * window )
 {
     romname = ((MainWindow *)window)->browser.setParent(*((MainWindow *)window)).setFilters("n64 roms (*.n64,*.z64,*.v64)").open();
+    loadrom(romname);
+    
     romthread = NULL;
     return 0;
 }
@@ -207,7 +215,7 @@ MainWindow::MainWindow()
     
     browser.setTitle("Load ROM");
     
-    btnload.setText   ("Load ROM");
+    btnload.setText("Load ROM");
     btnload.onActivate = [this]()
     {
         if(romthread or corethread)
@@ -227,7 +235,7 @@ MainWindow::MainWindow()
     API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
     btnoptions.setText("Options");
     
-    btnsave.setText   ("Save");
+    btnsave.setText("Save");
     btnsave.onActivate = [this]()
     {
         API::CoreDoCommand(M64CMD_STATE_SAVE, 0, NULL);
@@ -424,14 +432,16 @@ int main(int argc, char *argv[])
     // window
     
     std::cout << "UI: Did startup all plugins.\n";
+    
+    MainWindow * w = new MainWindow;
+    
     if(argc > 2)
     {
         std::cout << "UI: Found ROM on command line, loading: " << argv[2] << "\n";
-        romname = argv[2];
-        corethread = SDL_CreateThread(bootscript, "BootScript", (void *)&romname);
+        loadrom(string(argv[2]));
+        corethread = SDL_CreateThread(bootscript, "BootScript", w);
     }
     
-    new MainWindow;
     Application::run();
     return 0;
 }
