@@ -1,0 +1,32 @@
+Panui is licensed under a modified version of the Strider license, which is as follows:
+
+--------------
+This software is provided 'as-is', without any express or implied
+warranty. In no event will the authors be held liable for any damages
+arising from the use of this software.
+
+Permission is granted to anyone to use this software and/or its source
+code for any purpose, including commercial applications, and to alter
+it and redistribute it freely, subject to the following conditions:
+
+    1. The origin of the software must not be misrepresented.
+
+        1a. Modified versions of the software or its source code must
+        not be misrepesented as the original software or source code.
+
+        1b. Acknowledgment of use or modification of the software or
+        its source code is appreciated but not required.
+
+    2. This notice may not be removed from, or altered in, any source
+    distribution of the software.
+
+        2a. This notice is not required to be included in any compiled
+        distribution of the software.
+    
+    3. The software may not be sold for profit.
+    
+--------------
+
+Phoenix and Nall are licensed under the ISC license.
+
+The mupen64plus API headers are licensed under a version of the GPL, which is referenced in each of its source files.

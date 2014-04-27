@@ -1,3 +1,5 @@
 add include/ to your include path
 link SDL2
 note: one of the mupen headers is slightly modified to work around a stupid win32 assumption.
+
+You probably shouldn't use my makefile.
