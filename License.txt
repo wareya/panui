@@ -24,8 +24,6 @@ it and redistribute it freely, subject to the following conditions:
         2a. This notice is not required to be included in any compiled
         distribution of the software.
     
-    3. The software may not be sold for profit.
-    
 --------------
 
 Phoenix and Nall are licensed under the ISC license.
