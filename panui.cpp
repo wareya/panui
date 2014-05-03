@@ -1,14 +1,12 @@
-#define usleep nall_usleep
-#define SDL_DYNLIB
 #include <iostream>
+
 #include <SDL2/SDL.h>
+#undef main
 #include <phoenix/phoenix.hpp>
+#define SDL_DYNLIB
 #include <mupen/m64p_common.h>
 #include <mupen/m64p_frontend.h>
 #include <mupen/m64p_types.h>
-#undef main
-#undef usleep
-#include <unistd.h>
 
 using namespace nall;
 using namespace phoenix;
@@ -18,6 +16,7 @@ namespace API
     ptr_CoreGetAPIVersions CoreGetAPIVersions;
     ptr_CoreStartup CoreStartup;
     ptr_CoreAttachPlugin CoreAttachPlugin;
+    ptr_CoreDetachPlugin CoreDetachPlugin;
     ptr_CoreDoCommand CoreDoCommand;
     
     void * Video;
@@ -51,14 +50,21 @@ void debug (void * ctx, int level, const char * msg)
         std::cout << (const char *)ctx << ": " << msg << "\n";
 }
 
+struct Debugger : Window
+{
+    FixedLayout layout;
+    Button btn_break;
+    Debugger();
+};
+
 struct MainWindow : Window
 {
     FixedLayout layout;
-    Button btnload;
-    Button btnoptions;
-    Button btnsave;
-    Button btnrestore;
-    Button btnpauser;
+    Button btn_load;
+    Button btn_options;
+    Button btn_save;
+    Button btn_restore;
+    Button btn_pauser;
     image img_pause;
     image img_play;
     bool paused;
@@ -66,6 +72,8 @@ struct MainWindow : Window
     MainWindow();
     nall::function<void()> do_play;
     nall::function<void()> do_pause;
+    nall::function<void()> do_loadrom;
+    nall::function<void()> do_stop;
 };
 
 int bootscript( void * ptr )
@@ -80,10 +88,15 @@ int bootscript( void * ptr )
     if(romthread)
     {
         std::cout << "UI: Waiting for rom...\n";
-        SDL_WaitThread(romthread, NULL);
+        SDL_WaitThread(romthread, NULL); // safe to pass potential NULL (data race) to SDL_WaitThread
         std::cout << "UI: ROM got: " << romname << "\n";
     }
-    
+    if(romname.equals(""))
+    {
+        std::cout << "UI: Bad ROM name, leaving boot script.";
+        corethread = NULL;
+        return 0;
+    }
     m64p_error err = API::CoreDoCommand(M64CMD_ROM_OPEN, API::romsize, API::romdata);
     if(err)
     {
@@ -141,13 +154,56 @@ int bootscript( void * ptr )
         return 0;
     }
     std::cout << "UI: Did attach all plugins; running ROM.\n";
+    // no more returns until tail of function
     
-    mainwin->btnpauser.setImage(mainwin->img_pause, Orientation::Vertical);
-    mainwin->btnpauser.onActivate = mainwin->do_pause;
+    mainwin->btn_pauser.setImage(mainwin->img_pause, Orientation::Vertical);
+    mainwin->btn_pauser.onActivate = mainwin->do_pause;
+    mainwin->btn_load.onActivate = mainwin->do_stop;
+    mainwin->btn_load.setText("Stop Emulation");
     mainwin->paused = false;
     
     API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
+    std::cout << "UI: Emulation ended.\n";
+    API::CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
+    std::cout << "UI: Did close ROM.\n";
+    
+    auto err2 = M64ERR_SUCCESS;
+    
+    err = API::CoreDetachPlugin(RSPType);
+    if(err != M64ERR_SUCCESS)
+    {
+        std::cout << "RSP plugin errored while detaching: " << err;
+        err2 = err;
+    }
+    err = API::CoreDetachPlugin(InputType);
+    if(err != M64ERR_SUCCESS)
+    {
+        std::cout << "Input plugin errored while detaching: " << err;
+        err2 = err;
+    }
+    err = API::CoreDetachPlugin(AudioType);
+    if(err != M64ERR_SUCCESS)
+    {
+        std::cout << "Audio plugin errored while detaching: " << err;
+        err2 = err;
+    }
+    err = API::CoreDetachPlugin(VideoType);
+    if(err != M64ERR_SUCCESS)
+    {
+        std::cout << "Video plugin errored while detaching: " << err;
+        err2 = err;
+    }
+    //m64p_error CoreDoCommand(m64p_command Command, int ParamInt, void *ParamPtr)
+    
+    if(err2 == M64ERR_SUCCESS)
+        std::cout << "UI: Did detach all plugins; cleaning state, closing thread.\n";
+    
+    mainwin->btn_pauser.onActivate = mainwin->do_play;
+    mainwin->btn_load.onActivate = mainwin->do_loadrom;
+    mainwin->btn_load.setText("Load ROM");
     corethread = NULL;
+    
+    std::cout << "UI: Core quit.\n";
     
     return 0;
 }
@@ -159,7 +215,7 @@ int loadrom (string romname)
     
     if(!romname or romname.equals(""))
     {
-        std::cout << "Bad romname, returning.\n";
+        std::cout << "UI: Bad romname, returning.\n";
         corethread = NULL;
         return 0;
     }
@@ -190,8 +246,8 @@ MainWindow::MainWindow()
         if(corethread and this->paused)
         {
             API::CoreDoCommand(M64CMD_RESUME, 0, NULL);
-            this->btnpauser.setImage(this->img_pause, Orientation::Vertical);
-            this->btnpauser.onActivate = this->do_pause;
+            this->btn_pauser.setImage(this->img_pause, Orientation::Vertical);
+            this->btn_pauser.onActivate = this->do_pause;
             this->paused = false;
         }
         else
@@ -202,21 +258,14 @@ MainWindow::MainWindow()
         if(corethread and !this->paused)
         {
             API::CoreDoCommand(M64CMD_PAUSE, 0, NULL);
-            this->btnpauser.setImage(this->img_play, Orientation::Vertical);
-            this->btnpauser.onActivate = this->do_play;
+            this->btn_pauser.setImage(this->img_play, Orientation::Vertical);
+            this->btn_pauser.onActivate = this->do_play;
             this->paused = true;
         }
         else
             std::cout << "UI: No corethread in do_play\n";
     };
-    setFrameGeometry({64, 64, 242, 128});
-    
-    paused = true;
-    
-    browser.setTitle("Load ROM");
-    
-    btnload.setText("Load ROM");
-    btnload.onActivate = [this]()
+    do_loadrom  = [this]()
     {
         if(romthread or corethread)
             return;
@@ -229,19 +278,40 @@ MainWindow::MainWindow()
         }
 
         romthread = SDL_CreateThread(romscript, "RomScript", this);
-        
+        //romthread is Wait-ed in corethread
         corethread = SDL_CreateThread(bootscript, "BootScript", this);
+        SDL_DetachThread(corethread);
     };
-    API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
-    btnoptions.setText("Options");
+    do_stop = [this]()
+    {
+        if(corethread)
+        {
+            API::CoreDoCommand(M64CMD_STOP, 0, NULL);
+            API::CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
+            m64p_video_mode val = M64VIDEO_NONE;
+            API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_MODE, &val);
+            this->btn_load.setText("Load ROM");
+        }
+        else
+            std::cout << "UI: No corethread in do_stop\n";
+    };
+    setFrameGeometry({64, 64, 242, 128});
     
-    btnsave.setText("Save");
-    btnsave.onActivate = [this]()
+    paused = true;
+    
+    browser.setTitle("Load ROM");
+    
+    btn_load.setText("Load ROM");
+    btn_load.onActivate = do_loadrom;
+    btn_options.setText("Options");
+    
+    btn_save.setText("Save");
+    btn_save.onActivate = [this]()
     {
         API::CoreDoCommand(M64CMD_STATE_SAVE, 0, NULL);
     };
-    btnrestore.setText("Load");
-    btnrestore.onActivate = [this]()
+    btn_restore.setText("Load");
+    btn_restore.onActivate = [this]()
     {
         API::CoreDoCommand(M64CMD_STATE_LOAD, 0, NULL);
     };
@@ -249,14 +319,14 @@ MainWindow::MainWindow()
     img_play.load("play.png");
     img_pause.load("pause.png");
     
-    btnpauser.onActivate = do_play;
-    btnpauser.setImage(img_play, Orientation::Vertical);
+    btn_pauser.onActivate = do_play;
+    btn_pauser.setImage(img_play, Orientation::Vertical);
     
-    layout.append(btnload,    Geometry{10      , 10         , 128 , 24});
-    layout.append(btnoptions, Geometry{10      , 10+ 24+4   , 128 , 24});
-    layout.append(btnsave,    Geometry{10      , 10+(24+4)*2, 64-2, 24});
-    layout.append(btnrestore, Geometry{10+64+2 , 10+(24+4)*2, 64-2, 24});
-    layout.append(btnpauser,  Geometry{10+128+4, 10         , 80  , 80});
+    layout.append(btn_load,    Geometry{10      , 10         , 128 , 24});
+    layout.append(btn_options, Geometry{10      , 10+ 24+4   , 128 , 24});
+    layout.append(btn_save,    Geometry{10      , 10+(24+4)*2, 64-2, 24});
+    layout.append(btn_restore, Geometry{10+64+2 , 10+(24+4)*2, 64-2, 24});
+    layout.append(btn_pauser,  Geometry{10+128+4, 10         , 80  , 80});
     append(layout);
 
     onClose = &Application::quit;
@@ -298,7 +368,12 @@ int main(int argc, char *argv[])
     std::cout << SDL_GetError();
     if(!API::CoreAttachPlugin)
         return 0;
-        
+    
+    API::CoreDetachPlugin = (ptr_CoreDetachPlugin)SDL_LoadFunction(core, "CoreDetachPlugin");
+    std::cout << SDL_GetError();
+    if(!API::CoreDetachPlugin)
+        return 0;
+    
     API::CoreDoCommand = (ptr_CoreDoCommand)SDL_LoadFunction(core, "CoreDoCommand");
     std::cout << SDL_GetError();
     if(!API::CoreDoCommand)
