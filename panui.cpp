@@ -7,6 +7,9 @@
 #include <mupen/m64p_common.h>
 #include <mupen/m64p_frontend.h>
 #include <mupen/m64p_types.h>
+#include <mupen/m64p_debugger.h>
+
+#include <atomic>
 
 using namespace nall;
 using namespace phoenix;
@@ -18,6 +21,7 @@ namespace API
     ptr_CoreAttachPlugin CoreAttachPlugin;
     ptr_CoreDetachPlugin CoreDetachPlugin;
     ptr_CoreDoCommand CoreDoCommand;
+    ptr_DebugSetCallbacks DebugSetCallbacks;
     
     void * Video;
     ptr_PluginGetVersion VideoVersion; 
@@ -41,8 +45,8 @@ namespace API
 
 char working_dir[PATH_MAX];
 string romname;
-SDL_Thread * corethread;
-SDL_Thread * romthread;
+std::atomic<SDL_Thread *> corethread;
+std::atomic<SDL_Thread *> romthread;
 
 void debug (void * ctx, int level, const char * msg)
 {
@@ -57,6 +61,54 @@ struct Debugger : Window
     Debugger();
 };
 
+struct MainWindow;
+
+struct Options : Window
+{
+    FixedLayout layout;
+    Button btn_apply;
+    MainWindow * parent;
+    bool isvisible;
+    Options(MainWindow * arg_parent);
+    uint32_t pack_resolution(unsigned short, unsigned short);
+    unsigned short config_height;
+    unsigned short config_width;
+};
+
+uint32_t Options::pack_resolution(unsigned short h, unsigned short w)
+{
+    return (uint32_t(w)<<16) | h;
+}
+
+Options::Options(MainWindow * arg_parent)
+{
+    parent = arg_parent;
+    setFrameGeometry({64, 256, 340, 500});
+    config_height = 960;
+    config_width = 720;
+    btn_apply.setText("Apply");
+    btn_apply.onActivate = [this]()
+    {/*
+        std::cout << "UI: Options: Applying options-- \n";
+        m64p_2d_size val = {this->config_height, this->config_width};
+        std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
+        auto err = API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_SIZE, &val);
+        if(err != M64ERR_SUCCESS)
+            std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";*/
+        
+    };
+    layout.append(btn_apply, Geometry{10, 10, 40, 24});
+    append(layout);
+    setResizable(false);
+    isvisible = false;
+    setVisible(isvisible); // must be after setResizable()
+    onClose = [this]()
+    {
+        this->isvisible = !this->isvisible;
+        this->setVisible(isvisible);
+    };
+}
+
 struct MainWindow : Window
 {
     FixedLayout layout;
@@ -67,6 +119,7 @@ struct MainWindow : Window
     Button btn_pauser;
     image img_pause;
     image img_play;
+    Options * win_options;
     bool paused;
     BrowserWindow browser;
     MainWindow();
@@ -208,19 +261,20 @@ int bootscript( void * ptr )
     return 0;
 }
 
-int loadrom (string romname)
+int loadrom (string arg_romname)
 {
     if(working_dir)
         chdir((const char *)(working_dir));
     
-    if(!romname or romname.equals(""))
+    if(!arg_romname or arg_romname.equals(""))
     {
         std::cout << "UI: Bad romname, returning.\n";
         corethread = NULL;
         return 0;
     }
+    romname = arg_romname;
     
-    char * cstr_romname = romname.data();
+    char * cstr_romname = arg_romname.data();
     std::cout << "UI: ROM cstring: " << cstr_romname << "\n";
     file romfile(cstr_romname, file::mode::read);
     
@@ -241,6 +295,7 @@ int romscript( void * window )
 
 MainWindow::MainWindow()
 {
+    win_options = new Options(this);
     do_play = [this]()
     {
         if(corethread and this->paused)
@@ -303,7 +358,13 @@ MainWindow::MainWindow()
     
     btn_load.setText("Load ROM");
     btn_load.onActivate = do_loadrom;
+    
     btn_options.setText("Options");
+    btn_options.onActivate = [this]()
+    {
+        this->win_options->isvisible = !this->win_options->isvisible;
+        this->win_options->setVisible(this->win_options->isvisible);
+    };
     
     btn_save.setText("Save");
     btn_save.onActivate = [this]()
@@ -362,7 +423,7 @@ int main(int argc, char *argv[])
     if(!API::CoreStartup)
         return 0;
     
-    API::CoreStartup(0x020000, NULL, NULL, (void *)"Core", &debug, NULL, NULL);
+    API::CoreStartup(0x020000, ".", NULL, (void *)"Core", &debug, NULL, NULL);
     
     API::CoreAttachPlugin = (ptr_CoreAttachPlugin)SDL_LoadFunction(core, "CoreAttachPlugin");
     std::cout << SDL_GetError();
@@ -378,6 +439,12 @@ int main(int argc, char *argv[])
     std::cout << SDL_GetError();
     if(!API::CoreDoCommand)
         return 0;
+        
+    API::DebugSetCallbacks = (ptr_DebugSetCallbacks)SDL_LoadFunction(core, "DebugSetCallbacks");
+    std::cout << SDL_GetError();
+    if(!API::DebugSetCallbacks)
+        return 0;
+    API::DebugSetCallbacks(NULL, NULL, NULL);
     
     // Video
     const char * dllname = "";
@@ -514,7 +581,10 @@ int main(int argc, char *argv[])
     {
         std::cout << "UI: Found ROM on command line, loading: " << argv[2] << "\n";
         loadrom(string(argv[2]));
-        corethread = SDL_CreateThread(bootscript, "BootScript", w);
+        if(argc > 3)
+            bootscript(w);
+        else
+            corethread = SDL_CreateThread(bootscript, "BootScript", w);
     }
     
     Application::run();
