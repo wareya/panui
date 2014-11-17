@@ -21,7 +21,11 @@ namespace API
     ptr_CoreAttachPlugin CoreAttachPlugin;
     ptr_CoreDetachPlugin CoreDetachPlugin;
     ptr_CoreDoCommand CoreDoCommand;
+	
     ptr_DebugSetCallbacks DebugSetCallbacks;
+    ptr_DebugSetRunState DebugSetRunState;
+    ptr_DebugGetState DebugGetState;
+	ptr_DebugStep DebugStep;
     
     void * Video;
     ptr_PluginGetVersion VideoVersion; 
@@ -39,6 +43,25 @@ namespace API
     ptr_PluginGetVersion InputVersion; 
     ptr_PluginStartup InputStartup;
     
+	template<typename funcptr>
+	bool LoadFunction ( funcptr * function, const char * funcname, void * object )
+	{
+		*function = (funcptr)SDL_LoadFunction(object, funcname);
+		if(!function)
+		{
+			std::cout << "Could not find reference " << SDL_GetError()
+					  << " in "
+					  << (object == Video?"Video":
+						  object == Audio?"Audio":
+						  object == RSP  ?"RSP":
+					 	  object == Input?"Input":
+						  "Core?")
+					  << " dynamic library\n";
+			return 1;
+		}
+		return 0;
+	}
+	
     uint8_t * romdata;
     unsigned romsize;
 }
@@ -94,8 +117,8 @@ Options::Options(MainWindow * arg_parent)
         std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
         auto err = API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_SIZE, &val);
         if(err != M64ERR_SUCCESS)
-            std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";*/
-        
+            std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";
+        */
     };
     layout.append(btn_apply, Geometry{10, 10, 40, 24});
     append(layout);
@@ -214,7 +237,7 @@ int bootscript( void * ptr )
     mainwin->btn_load.onActivate = mainwin->do_stop;
     mainwin->btn_load.setText("Stop Emulation");
     mainwin->paused = false;
-    
+	
     API::CoreDoCommand(M64CMD_EXECUTE, 0, NULL);
     std::cout << "UI: Emulation ended.\n";
     API::CoreDoCommand(M64CMD_ROM_CLOSE, 0, NULL);
@@ -259,6 +282,32 @@ int bootscript( void * ptr )
     std::cout << "UI: Core quit.\n";
     
     return 0;
+}
+
+int subbootscript( void * ptr )
+{
+	std::cout << "UI: Started core threads -- waiting on full load.\n";
+	while(romthread)
+		SDL_Delay(10);
+	
+	auto time = SDL_GetTicks();
+    while(API::CoreDoCommand(M64CMD_RESUME, 0, NULL) != M64ERR_SUCCESS and SDL_GetTicks()-time < 2000)
+		SDL_Delay(10);
+	if(SDL_GetTicks()-time >= 2000)
+		std::cout << "UI: Core locked up for two seconds, you're on your own.\n";
+	
+	if(API::DebugSetRunState(2) == M64ERR_SUCCESS)
+	{
+		std::cout << "UI: Core seemed to allow setting debug run state.\n";
+		if(API::DebugStep() != M64ERR_SUCCESS)
+			std::cout << "UI: Failed to finish resuming emulation.\n";
+		else
+			std::cout << "UI: Finished loading ROM and initializing emulator.\n";
+	}
+	else
+		std::cout << "UI: Core does not seem to be built with debugging enabled.\n";
+	
+	return 0;
 }
 
 int loadrom (string arg_romname)
@@ -336,6 +385,9 @@ MainWindow::MainWindow()
         //romthread is Wait-ed in corethread
         corethread = SDL_CreateThread(bootscript, "BootScript", this);
         SDL_DetachThread(corethread);
+		
+		auto startthread = SDL_CreateThread(subbootscript, "SubBootScript", this);
+        SDL_DetachThread(startthread);
     };
     do_stop = [this]()
     {
@@ -410,42 +462,37 @@ int main(int argc, char *argv[])
     if(!core)
         return 0;
     
-    API::CoreGetAPIVersions = (ptr_CoreGetAPIVersions)SDL_LoadFunction(core, "CoreGetAPIVersions");
-    std::cout << SDL_GetError();
-    if(!API::CoreGetAPIVersions)
-        return 0;
-    
+	if(API::LoadFunction<ptr_CoreGetAPIVersions>(&API::CoreGetAPIVersions, "CoreGetAPIVersions", core))
+		return 0;
+	
     int VersionConfig, VersionDebug, VersionVidext, VersionExtra;
     API::CoreGetAPIVersions(&VersionConfig, &VersionDebug, &VersionVidext, &VersionExtra);
     
-    API::CoreStartup = (ptr_CoreStartup)SDL_LoadFunction(core, "CoreStartup");
-    std::cout << SDL_GetError();
-    if(!API::CoreStartup)
+	if(API::LoadFunction<ptr_CoreStartup>(&API::CoreStartup, "CoreStartup", core))
         return 0;
     
     API::CoreStartup(0x020000, ".", NULL, (void *)"Core", &debug, NULL, NULL);
     
-    API::CoreAttachPlugin = (ptr_CoreAttachPlugin)SDL_LoadFunction(core, "CoreAttachPlugin");
-    std::cout << SDL_GetError();
-    if(!API::CoreAttachPlugin)
+    if(API::LoadFunction<ptr_CoreAttachPlugin>(&API::CoreAttachPlugin, "CoreAttachPlugin", core))
         return 0;
     
-    API::CoreDetachPlugin = (ptr_CoreDetachPlugin)SDL_LoadFunction(core, "CoreDetachPlugin");
-    std::cout << SDL_GetError();
-    if(!API::CoreDetachPlugin)
+    if(API::LoadFunction<ptr_CoreDetachPlugin>(&API::CoreDetachPlugin, "CoreDetachPlugin", core))
         return 0;
     
-    API::CoreDoCommand = (ptr_CoreDoCommand)SDL_LoadFunction(core, "CoreDoCommand");
-    std::cout << SDL_GetError();
-    if(!API::CoreDoCommand)
+    if(API::LoadFunction<ptr_CoreDoCommand>(&API::CoreDoCommand, "CoreDoCommand", core))
         return 0;
         
-    API::DebugSetCallbacks = (ptr_DebugSetCallbacks)SDL_LoadFunction(core, "DebugSetCallbacks");
-    std::cout << SDL_GetError();
-    if(!API::DebugSetCallbacks)
+    if(API::LoadFunction<ptr_DebugSetCallbacks>(&API::DebugSetCallbacks, "DebugSetCallbacks", core))
         return 0;
     API::DebugSetCallbacks(NULL, NULL, NULL);
-    
+	
+    if(API::LoadFunction<ptr_DebugSetRunState>(&API::DebugSetRunState, "DebugSetRunState", core))
+        return 0;
+    if(API::LoadFunction<ptr_DebugGetState>(&API::DebugGetState, "DebugGetState", core))
+        return 0;
+    if(API::LoadFunction<ptr_DebugStep>(&API::DebugStep, "DebugStep", core))
+        return 0;
+	
     // Video
     const char * dllname = "";
     if(argc > 1)
@@ -457,17 +504,13 @@ int main(int argc, char *argv[])
     if(!API::Video)
         return 0;
     
-    API::VideoStartup = (ptr_PluginStartup)SDL_LoadFunction(API::Video, "PluginStartup");
-    std::cout << SDL_GetError();
-    if(!API::VideoStartup)
+    if(API::LoadFunction<ptr_PluginStartup>(&API::VideoStartup, "PluginStartup", API::Video))
     {
         std::cout << "Video plugin is not a valid m64p plugin (no startup).";
         return 0;
     }
     
-    API::VideoVersion = (ptr_PluginGetVersion)SDL_LoadFunction(API::Video, "PluginGetVersion");
-    std::cout << SDL_GetError();
-    if(!API::VideoVersion)
+    if(API::LoadFunction<ptr_PluginGetVersion>(&API::VideoVersion, "PluginGetVersion", API::Video))
     {
         std::cout << "Video plugin is not a valid m64p plugin (no version).";
         return 0;
@@ -487,17 +530,13 @@ int main(int argc, char *argv[])
     if(!API::Audio)
         return 0;
     
-    API::AudioStartup = (ptr_PluginStartup)SDL_LoadFunction(API::Audio, "PluginStartup");
-    std::cout << SDL_GetError();
-    if(!API::AudioStartup)
+    if(API::LoadFunction<ptr_PluginStartup>(&API::AudioStartup, "PluginStartup", API::Audio))
     {
         std::cout << "Audio plugin is not a valid m64p plugin (no startup).";
         return 0;
     }
     
-    API::AudioVersion = (ptr_PluginGetVersion)SDL_LoadFunction(API::Audio, "PluginGetVersion");
-    std::cout << SDL_GetError();
-    if(!API::AudioVersion)
+    if(API::LoadFunction<ptr_PluginGetVersion>(&API::AudioVersion, "PluginGetVersion", API::Audio))
     {
         std::cout << "Audio plugin is not a valid m64p plugin (no version).";
         return 0;
@@ -517,17 +556,13 @@ int main(int argc, char *argv[])
     if(!API::Input)
         return 0;
     
-    API::InputStartup = (ptr_PluginStartup)SDL_LoadFunction(API::Input, "PluginStartup");
-    std::cout << SDL_GetError();
-    if(!API::InputStartup)
+    if(API::LoadFunction<ptr_PluginStartup>(&API::InputStartup, "PluginStartup", API::Input))
     {
         std::cout << "Input plugin is not a valid m64p plugin (no startup).";
         return 0;
     }
     
-    API::InputVersion = (ptr_PluginGetVersion)SDL_LoadFunction(API::Input, "PluginGetVersion");
-    std::cout << SDL_GetError();
-    if(!API::InputVersion)
+    if(API::LoadFunction<ptr_PluginGetVersion>(&API::InputVersion, "PluginGetVersion", API::Input))
     {
         std::cout << "Input plugin is not a valid m64p plugin (no version).";
         return 0;
@@ -548,17 +583,13 @@ int main(int argc, char *argv[])
     if(!API::RSP)
         return 0;
     
-    API::RSPStartup = (ptr_PluginStartup)SDL_LoadFunction(API::RSP, "PluginStartup");
-    std::cout << SDL_GetError();
-    if(!API::RSPStartup)
+    if(API::LoadFunction<ptr_PluginStartup>(&API::RSPStartup, "PluginStartup", API::RSP))
     {
         std::cout << "RSP plugin is not a valid m64p plugin (no startup).";
         return 0;
     }
     
-    API::RSPVersion = (ptr_PluginGetVersion)SDL_LoadFunction(API::RSP, "PluginGetVersion");
-    std::cout << SDL_GetError();
-    if(!API::RSPVersion)
+    if(API::LoadFunction<ptr_PluginGetVersion>(&API::RSPVersion, "PluginGetVersion", API::RSP))
     {
         std::cout << "RSP plugin is not a valid m64p plugin (no version).";
         return 0;
@@ -581,10 +612,7 @@ int main(int argc, char *argv[])
     {
         std::cout << "UI: Found ROM on command line, loading: " << argv[2] << "\n";
         loadrom(string(argv[2]));
-        if(argc > 3)
-            bootscript(w);
-        else
-            corethread = SDL_CreateThread(bootscript, "BootScript", w);
+        corethread = SDL_CreateThread(bootscript, "BootScript", w);
     }
     
     Application::run();
