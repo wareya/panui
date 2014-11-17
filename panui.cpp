@@ -77,14 +77,19 @@ void debug (void * ctx, int level, const char * msg)
         std::cout << (const char *)ctx << ": " << msg << "\n";
 }
 
+struct MainWindow;
+
 struct Debugger : Window
 {
     FixedLayout layout;
-    Button btn_break;
-    Debugger();
+    Button btn_memory;
+    Button btn_registers;
+    Button btn_search;
+    Button btn_commands;
+	bool visible;
+    MainWindow * parent;
+    Debugger(MainWindow * arg_parent);
 };
-
-struct MainWindow;
 
 struct Options : Window
 {
@@ -93,32 +98,27 @@ struct Options : Window
     MainWindow * parent;
     bool isvisible;
     Options(MainWindow * arg_parent);
-    uint32_t pack_resolution(unsigned short, unsigned short);
     unsigned short config_height;
     unsigned short config_width;
 };
 
-uint32_t Options::pack_resolution(unsigned short h, unsigned short w)
-{
-    return (uint32_t(w)<<16) | h;
-}
-
 Options::Options(MainWindow * arg_parent)
 {
+	setTitle("Options");
     parent = arg_parent;
     setFrameGeometry({64, 256, 340, 500});
     config_height = 960;
     config_width = 720;
     btn_apply.setText("Apply");
     btn_apply.onActivate = [this]()
-    {/*
+    {
         std::cout << "UI: Options: Applying options-- \n";
         m64p_2d_size val = {this->config_height, this->config_width};
-        std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
+        //std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
         auto err = API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_SIZE, &val);
         if(err != M64ERR_SUCCESS)
             std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";
-        */
+        
     };
     layout.append(btn_apply, Geometry{10, 10, 40, 24});
     append(layout);
@@ -143,6 +143,7 @@ struct MainWindow : Window
     image img_pause;
     image img_play;
     Options * win_options;
+	Debugger * win_debugger;
     bool paused;
     BrowserWindow browser;
     MainWindow();
@@ -150,6 +151,32 @@ struct MainWindow : Window
     nall::function<void()> do_pause;
     nall::function<void()> do_loadrom;
     nall::function<void()> do_stop;
+};
+
+Debugger::Debugger(MainWindow * arg_parent)
+{
+	setTitle("Debugger");
+    parent = arg_parent;
+    setGeometry({64, 64, 20+128+4, 10+24+4+24+10});
+	btn_memory.setText("Memory");
+	btn_registers.setText("Registers");
+	btn_search.setText("Search");
+	btn_commands.setText("Commands");
+	
+    layout.append(btn_memory,    Geometry{10     , 10     , 64-2, 24});
+    layout.append(btn_registers, Geometry{10+64+2, 10     , 64-2, 24});
+    layout.append(btn_search,    Geometry{10     , 10+24+4, 64-2, 24});
+    layout.append(btn_commands,  Geometry{10+64+2, 10+24+4, 64-2, 24});
+	
+    onClose = [this]()
+	{
+		this->parent->win_debugger = NULL;
+	};
+    
+    append(layout);
+    setResizable(false);
+	visible = false;
+    setVisible(false); // must be after setResizable()
 };
 
 int bootscript( void * ptr )
@@ -302,7 +329,11 @@ int subbootscript( void * ptr )
 		if(API::DebugStep() != M64ERR_SUCCESS)
 			std::cout << "UI: Failed to finish resuming emulation.\n";
 		else
+		{
 			std::cout << "UI: Finished loading ROM and initializing emulator.\n";
+			((MainWindow*)ptr)->win_debugger->setVisible(true);
+			((MainWindow*)ptr)->win_debugger->visible = true;
+		}
 	}
 	else
 		std::cout << "UI: Core does not seem to be built with debugging enabled.\n";
@@ -344,7 +375,9 @@ int romscript( void * window )
 
 MainWindow::MainWindow()
 {
+	setTitle("Panui");
     win_options = new Options(this);
+    win_debugger = new Debugger(this);
     do_play = [this]()
     {
         if(corethread and this->paused)
@@ -398,11 +431,13 @@ MainWindow::MainWindow()
             m64p_video_mode val = M64VIDEO_NONE;
             API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_MODE, &val);
             this->btn_load.setText("Load ROM");
+			if(win_debugger)
+				delete win_debugger;
         }
         else
             std::cout << "UI: No corethread in do_stop\n";
     };
-    setFrameGeometry({64, 64, 242, 128});
+    setGeometry({64, 64, 10+128+4+80+10, 10+24*3+4*2+10});
     
     paused = true;
     
