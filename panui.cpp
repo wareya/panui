@@ -26,6 +26,7 @@ namespace API
     ptr_DebugSetRunState DebugSetRunState;
     ptr_DebugGetState DebugGetState;
 	ptr_DebugStep DebugStep;
+	ptr_DebugMemGetPointer DebugMemGetPointer;
     
     void * Video;
     ptr_PluginGetVersion VideoVersion; 
@@ -79,6 +80,88 @@ void debug (void * ctx, int level, const char * msg)
 
 struct MainWindow;
 
+struct MemoryWindow : Window
+{
+	FixedLayout layout;
+	TextEdit display;
+	LineEdit address;
+	
+	bool editing;
+	Uint32 inputnum;
+	MemoryWindow()
+	{
+		setTitle("Memory");
+		setGeometry({64, 256, 300, 400});
+		
+		auto update = [this]()
+		{
+			auto size = sizeof(Uint32);
+			if(this->address.text().length() <= 8 or (this->address.text().beginsWith("0x") and this->address.text().length() <= 10))
+				inputnum = hex(this->address.text());
+			else
+			{
+				puts("UI: Invalid address input in memory viewer.");
+				return;
+			}
+			inputnum = inputnum/size*size;
+			void * RAM = API::DebugMemGetPointer(M64P_DBG_PTR_RDRAM);
+			if(!RAM)
+			{
+				puts("UI: Invalid memory request in memory viewer!");
+				return;
+			}
+			auto isvalidRAM = [](Uint32 num) // checks the validity of num and normalizes it to the correct range
+			{
+				if(num >= 0x80000000)
+					num -= 0x80000000;
+				if(num > 0x00800000)
+				{
+					puts("UI: Memory display location invalid.");
+					return 0xFFFFFFFF;
+				}
+				return num;
+			};
+			if((inputnum = isvalidRAM(inputnum)) == 0xFFFFFFFF)
+				return;
+			
+			auto numwide = 4;
+			auto sizewide = numwide*size;
+			auto sizetall = 10;
+			
+			nall::string displaytext("");
+			
+			Uint32 buffer;
+			for (auto j = 0; j < sizetall*sizewide; j += sizewide)
+			{
+				for (auto i = 0; i < sizewide; i += size)
+				{
+					if(isvalidRAM(inputnum+i+j) == 0xFFFFFFFF)
+						goto ret;
+					buffer = *(Uint32*)((char*)RAM+inputnum+i+j);
+					SDL_Swap32(buffer);
+					displaytext.append(hex<8, '0'>(buffer), " ");
+				}
+				displaytext.append("\n");
+			}
+			display.setText(displaytext);
+			ret:
+			return;
+		};
+		
+		display.setFont("Courier New");
+		address.setFont("Courier New");
+		address.setText("0x80000000");
+		address.onChange = update;
+		
+		layout.append(address, Geometry{10, 10, 128-5, 24});
+		layout.append(display, Geometry{10, 24+20, 300-20, -24-20+400-10});
+		append(layout);
+		
+		
+		setVisible(true);
+	}
+};
+
 struct Debugger : Window
 {
     FixedLayout layout;
@@ -89,6 +172,7 @@ struct Debugger : Window
 	bool visible;
     MainWindow * parent;
     Debugger(MainWindow * arg_parent);
+	MemoryWindow win_memory;
 };
 
 struct Options : Window
@@ -106,7 +190,7 @@ Options::Options(MainWindow * arg_parent)
 {
 	setTitle("Options");
     parent = arg_parent;
-    setFrameGeometry({64, 256, 340, 500});
+    setGeometry({64, 256, 340, 500});
     config_height = 960;
     config_width = 720;
     btn_apply.setText("Apply");
@@ -526,6 +610,8 @@ int main(int argc, char *argv[])
     if(API::LoadFunction<ptr_DebugGetState>(&API::DebugGetState, "DebugGetState", core))
         return 0;
     if(API::LoadFunction<ptr_DebugStep>(&API::DebugStep, "DebugStep", core))
+        return 0;
+    if(API::LoadFunction<ptr_DebugMemGetPointer>(&API::DebugMemGetPointer, "DebugMemGetPointer", core))
         return 0;
 	
     // Video
