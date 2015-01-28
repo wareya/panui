@@ -1,9 +1,10 @@
-// I went to write this based on a random explanation, but when I went and compared to an implementation, it was almost exactly the same. Go figure.
-// Just a disclaimer.
-// WTFPL
-char * stpcpy (char * destination, char * source)
+#define __CRT__NO_INLINE
+
+char * __cdecl
+stpcpy(char * __restrict__ _Dest,const char * __restrict__ _Source)
 {
-    while ((* destination++ = * source++) != '\0');
-    return destination - 1;
+  for (; *_Source; _Source++, _Dest++)
+    *_Dest = *_Source;
+  *_Dest = '\0';
+  return _Dest;
 }
-// Yeah, for some reason my toolkit doesn't have this, and one of the libraries I have to link depends on it being linked. Yay!

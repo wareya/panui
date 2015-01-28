@@ -53,7 +53,7 @@ SubWindow::SubWindow() {
     string filename = BrowserWindow()
     .setParent(*this)
     .setTitle("Open File!!")
-    .setFilters("Text documents (*.txt)", "All files (*)")
+    .setFilters("Text documents (*.txt), All files (*)")
     .setPath("c:/users/byuu/downloads")
     .directory();
     print("{", filename, "}\n");
@@ -140,7 +140,9 @@ MainWindow::MainWindow() {
 
   layout.setMargin(5);
   label.setText("Test Label");
-  comboButton.append("Item 1", "Item 2", "Long Item 3");
+  comboButton.append("Item 1");
+  comboButton.append("Item 2");
+  comboButton.append("Long Item 3");
   radio1.setText("Radio 1");
   radio2.setText("Radio 2");
   radio3.setText("Radio 3");
@@ -150,13 +152,13 @@ MainWindow::MainWindow() {
   textEdit.setText("Test1\nTest2");
 //listView.setFont(Font::sans(20, "Bold"));
   listView.setHeaderVisible();
-  listView.setHeaderText("Column 1", "Column 2", "Column 3");
-  listView.append("Alpha",   "1B",     "1C");
-  listView.append("Beta",    "Red",    "2C");
-  listView.append("Delta",   "3B",     "3C");
-  listView.append("Epsilon", "4B",     "4C");
-  listView.append("Gamma",   "5B",     "5C");
-  listView.append("Zeta",    "Yellow", "6C");
+  listView.setHeaderText({"Column 1", "Column 2", "Column 3"});
+  listView.append({"Alpha",   "1B",     "1C"});
+  listView.append({"Beta",    "Red",    "2C"});
+  listView.append({"Delta",   "3B",     "3C"});
+  listView.append({"Epsilon", "4B",     "4C"});
+  listView.append({"Gamma",   "5B",     "5C"});
+  listView.append({"Zeta",    "Yellow", "6C"});
   listView.setImage(1, 1, {"image.png"});
   listView.autoSizeColumns();
 

@@ -14,7 +14,7 @@ struct MainWindow : Window {
 };
 
 MainWindow::MainWindow() {
-  setSmartGeometry({64, 64, 560, 370});  //Windows
+  setGeometry({64, 64, 560, 370});  //Windows
 //setSmartGeometry({64, 64, 555, 395});  //GTK+
 //setSmartGeometry({64, 64, 560, 405});  //Qt
   setTitle("Hex Edit");

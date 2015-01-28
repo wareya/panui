@@ -27,6 +27,7 @@ namespace API
     ptr_DebugGetState DebugGetState;
 	ptr_DebugStep DebugStep;
 	ptr_DebugMemGetPointer DebugMemGetPointer;
+    ptr_DebugMemRead32 DebugMemRead32;
     
     void * Video;
     ptr_PluginGetVersion VideoVersion; 
@@ -88,78 +89,7 @@ struct MemoryWindow : Window
 	
 	bool editing;
 	Uint32 inputnum;
-	MemoryWindow()
-	{
-		setTitle("Memory");
-		setGeometry({64, 256, 300, 400});
-		
-		auto update = [this]()
-		{
-			auto size = sizeof(Uint32);
-			if(this->address.text().length() <= 8 or (this->address.text().beginsWith("0x") and this->address.text().length() <= 10))
-				inputnum = hex(this->address.text());
-			else
-			{
-				puts("UI: Invalid address input in memory viewer.");
-				return;
-			}
-			inputnum = inputnum/size*size;
-			void * RAM = API::DebugMemGetPointer(M64P_DBG_PTR_RDRAM);
-			if(!RAM)
-			{
-				puts("UI: Invalid memory request in memory viewer!");
-				return;
-			}
-			auto isvalidRAM = [](Uint32 num) // checks the validity of num and normalizes it to the correct range
-			{
-				if(num >= 0x80000000)
-					num -= 0x80000000;
-				if(num > 0x00800000)
-				{
-					puts("UI: Memory display location invalid.");
-					return 0xFFFFFFFF;
-				}
-				return num;
-			};
-			if((inputnum = isvalidRAM(inputnum)) == 0xFFFFFFFF)
-				return;
-			
-			auto numwide = 4;
-			auto sizewide = numwide*size;
-			auto sizetall = 10;
-			
-			nall::string displaytext("");
-			
-			Uint32 buffer;
-			for (auto j = 0; j < sizetall*sizewide; j += sizewide)
-			{
-				for (auto i = 0; i < sizewide; i += size)
-				{
-					if(isvalidRAM(inputnum+i+j) == 0xFFFFFFFF)
-						goto ret;
-					buffer = *(Uint32*)((char*)RAM+inputnum+i+j);
-					SDL_Swap32(buffer);
-					displaytext.append(hex<8, '0'>(buffer), " ");
-				}
-				displaytext.append("\n");
-			}
-			display.setText(displaytext);
-			ret:
-			return;
-		};
-		
-		display.setFont("Courier New");
-		address.setFont("Courier New");
-		address.setText("0x80000000");
-		address.onChange = update;
-		
-		layout.append(address, Geometry{10, 10, 128-5, 24});
-		layout.append(display, Geometry{10, 24+20, 300-20, -24-20+400-10});
-		append(layout);
-		
-		
-		setVisible(true);
-	}
+	MemoryWindow();
 };
 
 struct Debugger : Window
@@ -180,41 +110,10 @@ struct Options : Window
     FixedLayout layout;
     Button btn_apply;
     MainWindow * parent;
-    bool isvisible;
     Options(MainWindow * arg_parent);
     unsigned short config_height;
     unsigned short config_width;
 };
-
-Options::Options(MainWindow * arg_parent)
-{
-	setTitle("Options");
-    parent = arg_parent;
-    setGeometry({64, 256, 340, 500});
-    config_height = 960;
-    config_width = 720;
-    btn_apply.setText("Apply");
-    btn_apply.onActivate = [this]()
-    {
-        std::cout << "UI: Options: Applying options-- \n";
-        m64p_2d_size val = {this->config_height, this->config_width};
-        //std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
-        auto err = API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_SIZE, &val);
-        if(err != M64ERR_SUCCESS)
-            std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";
-        
-    };
-    layout.append(btn_apply, Geometry{10, 10, 40, 24});
-    append(layout);
-    setResizable(false);
-    isvisible = false;
-    setVisible(isvisible); // must be after setResizable()
-    onClose = [this]()
-    {
-        this->isvisible = !this->isvisible;
-        this->setVisible(isvisible);
-    };
-}
 
 struct MainWindow : Window
 {
@@ -237,15 +136,125 @@ struct MainWindow : Window
     nall::function<void()> do_stop;
 };
 
+MemoryWindow::MemoryWindow()
+{
+	setTitle("Memory");
+	
+	auto update = [this]()
+	{
+		auto size = sizeof(Uint32);
+		if(this->address.text().length() <= 8 or (this->address.text().beginsWith("0x") and this->address.text().length() <= 10))
+			inputnum = hex(this->address.text());
+		else
+		{
+			puts("UI: Invalid address input in memory viewer.");
+			return;
+		}
+		inputnum = inputnum/size*size;
+		
+		auto numwide = 4;
+		auto sizewide = numwide*size;
+		auto sizetall = 0x30;
+		
+		nall::string displaytext("");
+		
+		Uint32 buffer;
+		for (auto j = 0; j < sizetall*sizewide; j += sizewide)
+		{
+			displaytext.append("0x", hex<8, '0'>(inputnum+j), ": ");
+			for (auto i = 0; i < sizewide; i += size)
+			{
+				displaytext.append(hex<8, '0'>(API::DebugMemRead32(inputnum+i+j)));
+				if(i+size < sizewide)
+					displaytext.append(" ");
+			}
+			if(j+sizewide < sizetall*sizewide)
+				displaytext.append("\n");
+		}
+		display.setText(displaytext);
+		ret:
+		return;
+	};
+	auto font = Font::monospace(10);
+	display.setFont(font);
+	address.setFont(font);
+	address.setText("0x80000000");
+	address.onChange = update;
+	
+	auto prefixsize = Font::size(font, "0x");
+	auto delimsize = Font::size(font, ": ");
+	auto wordsize = Font::size(font, "12345678");
+	auto chunksize = Font::size(font, "12345678 12345678 12345678 12345678");
+	
+	auto viewwidth = prefixsize.width+wordsize.width+delimsize.width+chunksize.width+6+24;
+	auto entrywidth = wordsize.width+prefixsize.width+6;
+	auto entryheight = wordsize.height+6;
+	auto viewheight = wordsize.height*0x30+6;
+	
+	setGeometry({64, 256, viewwidth+20, entryheight + 30 + viewheight});
+	
+	layout.append(address, Geometry{10, 10, entrywidth, entryheight});
+	layout.append(display, Geometry{10, entryheight+20, viewwidth, viewheight});
+	append(layout);
+	
+	
+	setVisible(false);
+}
+
+Options::Options(MainWindow * arg_parent)
+{
+	setTitle("Options");
+    parent = arg_parent;
+    setGeometry({64, 256, 340, 500});
+    config_height = 960;
+    config_width = 720;
+    btn_apply.setText("Apply");
+    btn_apply.onActivate = [this]()
+    {
+        std::cout << "UI: Options: Applying options-- \n";
+        m64p_2d_size val = {this->config_height, this->config_width};
+        //std::cout << "UI: Options: Setting resolution to " << std::dec << this->config_height << " " << this->config_width << " (" << std::hex << val << ")\n";
+        auto err = API::CoreDoCommand(M64CMD_CORE_STATE_SET, M64CORE_VIDEO_SIZE, &val);
+        if(err != M64ERR_SUCCESS)
+            std::cout << "UI: Options: Core returned error on attempt to change video size: " << err << "\n";
+        
+    };
+    layout.append(btn_apply, Geometry{10, 10, 40, 24});
+    append(layout);
+    setResizable(false);
+    setVisible(false); // must be after setResizable()
+    onClose = [this]()
+    {
+        this->setVisible(!this->visible());
+    };
+}
+
 Debugger::Debugger(MainWindow * arg_parent)
 {
 	setTitle("Debugger");
     parent = arg_parent;
     setGeometry({64, 64, 20+128+4, 10+24+4+24+10});
 	btn_memory.setText("Memory");
+	btn_memory.onActivate = [this]()
+	{
+		//this->btn_memory.setVisible(!this->btn_memory.visible());
+        this->win_memory.setVisible(true);
+	};
 	btn_registers.setText("Registers");
+	btn_registers.onActivate = [this]()
+	{
+		//this->btn_registers.setVisible(!this->btn_registers.visible());
+	};
 	btn_search.setText("Search");
+	btn_search.onActivate = [this]()
+	{
+		//this->btn_search.setVisible(!this->btn_search.visible());
+	};
 	btn_commands.setText("Commands");
+	btn_commands.onActivate = [this]()
+	{
+		//this->btn_commands.setVisible(!this->btn_commands.visible());
+	};
 	
     layout.append(btn_memory,    Geometry{10     , 10     , 64-2, 24});
     layout.append(btn_registers, Geometry{10+64+2, 10     , 64-2, 24});
@@ -259,7 +268,6 @@ Debugger::Debugger(MainWindow * arg_parent)
     
     append(layout);
     setResizable(false);
-	visible = false;
     setVisible(false); // must be after setResizable()
 };
 
@@ -533,8 +541,7 @@ MainWindow::MainWindow()
     btn_options.setText("Options");
     btn_options.onActivate = [this]()
     {
-        this->win_options->isvisible = !this->win_options->isvisible;
-        this->win_options->setVisible(this->win_options->isvisible);
+        this->win_options->setVisible(!this->win_options->visible());
     };
     
     btn_save.setText("Save");
@@ -612,6 +619,8 @@ int main(int argc, char *argv[])
     if(API::LoadFunction<ptr_DebugStep>(&API::DebugStep, "DebugStep", core))
         return 0;
     if(API::LoadFunction<ptr_DebugMemGetPointer>(&API::DebugMemGetPointer, "DebugMemGetPointer", core))
+        return 0;
+    if(API::LoadFunction<ptr_DebugMemRead32>(&API::DebugMemRead32, "DebugMemRead32", core))
         return 0;
 	
     // Video
